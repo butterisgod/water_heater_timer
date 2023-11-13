@@ -10,10 +10,14 @@ const char* password = "xxxx";
 
 // Initialize NTP Client
 WiFiUDP ntpUDP;
-NTPClient timeClient(ntpUDP, "pool.ntp.org", -5 * 3600, 60000); // Adjust for your timezone where -5 is US Eastern, change to yours
+NTPClient timeClient(ntpUDP, "pool.ntp.org", -5 * 3600, 60000); // Adjust for your timezone
 
 // Heater control pin
 const int heaterPin = 5;
+
+// Global variable to track last sync time
+unsigned long lastSyncTime = 0;
+const unsigned long syncInterval = 86400000; // 24 hours in milliseconds
 
 void setup() {
     Heltec.begin(true, false, true);  // Initialize Heltec module
@@ -22,20 +26,28 @@ void setup() {
     Heltec.display->flipScreenVertically();
     Heltec.display->setFont(ArialMT_Plain_10);
 
-    WiFi.begin(ssid, password);  // Connect to WiFi
-    while (WiFi.status() != WL_CONNECTED) {
-        delay(5000);
-        updateDisplay("Connecting to WiFi...", "", "");
-    }
-
-    timeClient.begin();  // Start NTP client
     pinMode(heaterPin, OUTPUT);  // Initialize heater control pin
+
+    // Perform an initial time synchronization on startup
+    if (syncTime()) {
+        updateDisplay("Initial Sync successful", "", "");
+    } else {
+        updateDisplay("Initial Sync unsuccessful", "", "");
+    }
 }
 
-
 void loop() {
+    // Check if it's time to sync
+    if (millis() - lastSyncTime >= syncInterval) {
+        if (syncTime()) {
+            updateDisplay("Sync successful", "", "");
+        } else {
+            updateDisplay("Sync unsuccessful", "", "");
+        }
+        lastSyncTime = millis();
+    }
+
     String currentTime = getFormattedDate();
-    String wifiStatus = WiFi.status() == WL_CONNECTED ? "WiFi: Connected" : "WiFi: Disconnected";
     String heaterStatus = digitalRead(heaterPin) == HIGH ? "WATER HEATER ON" : "WATER HEATER OFF";
 
     if (isPeakTime()) {
@@ -44,7 +56,7 @@ void loop() {
         digitalWrite(heaterPin, HIGH);  // Turn on heater during off-peak time
     }
 
-    updateDisplay(currentTime, wifiStatus, heaterStatus);
+    updateDisplay(currentTime, "", heaterStatus);
     delay(10000);  // Delay for 10 seconds
 }
 
@@ -57,36 +69,26 @@ void updateDisplay(const String& time, const String& wifiStatus, const String& h
     Heltec.display->display();
 }
 
-bool isDaylightSavingTime(struct tm *timeinfo) {
-    int month = timeinfo->tm_mon + 1;  // tm_mon: months since January [0-11]
-    int mday = timeinfo->tm_mday;
-    int wday = timeinfo->tm_wday;
-
-    if (month < 3 || month > 11) {
-        return false; // DST is not in effect in Jan, Feb, and Dec
-    }
-    if (month > 3 && month < 11) {
-        return true; // DST is in effect from April to October
+bool syncTime() {
+    WiFi.begin(ssid, password);
+    if (WiFi.waitForConnectResult() != WL_CONNECTED) {
+        return false; // WiFi connection failed
     }
 
-    // In March and November, check if we are past the second Sunday
-    if ((month == 3 && (mday - wday) >= 8) || (month == 11 && (mday - wday) < 1)) {
-        return true;
-    }
+    timeClient.begin(); // Initialize NTP Client
+    timeClient.update(); // Update time
 
-    return false;
+    bool syncSuccess = timeClient.isTimeSet(); // Check if time was successfully set
+
+    WiFi.disconnect(true); // Disconnect from WiFi
+
+    return syncSuccess;
 }
 
 String getFormattedDate() {
-    timeClient.update();
+    // Assuming timeClient.update() is already called regularly in syncTime()
     unsigned long epochTime = timeClient.getEpochTime();
     struct tm *ptm = gmtime((time_t *)&epochTime); 
-
-    // Adjust for DST if necessary
-    if (isDaylightSavingTime(ptm)) {
-        epochTime += 3600; // Add one hour
-        ptm = gmtime((time_t *)&epochTime);
-    }
 
     char dateBuffer[20];
     sprintf(dateBuffer, "%04d-%02d-%02d %02d:%02d:%02d", 
@@ -107,16 +109,14 @@ bool isPeakTime() {
     if (dayOfWeek >= 1 && dayOfWeek <= 5) {  // Weekday check
         if ((month >= 11 || month <= 3) && (hour > 6 || (hour == 6 && minute > 0)) && hour < 10) {
             return true;  // Winter peak time
-        } else if (month >= 4 && month <= 10 && (hour > 13 || (hour == 13 && minute > 0)) && hour < 20) {
+        } else if (month >= 4 && month <= 10 and (hour > 13 || (hour == 13 and minute > 0)) and hour < 20) {
             return true;  // Summer peak time
         }
     }
     return false;  // Non-peak time
 }
 
-
 struct tm getCurrentTime() {
-    timeClient.update();
     unsigned long epochTime = timeClient.getEpochTime();
     return *gmtime((time_t *)&epochTime); 
 }
