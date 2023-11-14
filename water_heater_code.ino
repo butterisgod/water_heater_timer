@@ -4,8 +4,8 @@
 #include <heltec.h>
 
 // Network credentials
-const char* ssid = "xxx";
-const char* password = "xxx";
+const char* ssid = "xx";
+const char* password = "xx";
 
 // Heater control pin and relay type
 const int heaterPin = 5;
@@ -22,6 +22,7 @@ const unsigned long syncInterval = 86400000; // 24 hours in milliseconds
 // Time variables
 int hour, minute, second, day, month, year, dayOfWeek;
 bool timeSynced = false;
+unsigned long lastSyncEpoch = 0;  // Last synchronized time as Unix timestamp
 
 void setup() {
     Heltec.begin(true, false, true);  // Initialize Heltec module
@@ -32,26 +33,19 @@ void setup() {
 
     pinMode(heaterPin, OUTPUT);  // Initialize heater control pin
 
-    // Perform an initial time synchronization on startup
-    if (syncTime()) {
-        updateDisplay("Initial Sync successful", "", "");
-    } else {
-        updateDisplay("Initial Sync unsuccessful", "", "");
-    }
+    String syncStatus = syncTime() ? "Time Sync success" : "Time Sync unsuccessful";
+    updateDisplay(syncStatus, "", "");
 }
 
 void loop() {
     // Check if it's time to sync
     if (millis() - lastSyncTime >= syncInterval) {
-        if (syncTime()) {
-            updateDisplay("Sync successful", "", "");
-        } else {
-            updateDisplay("Sync unsuccessful", "", "");
-        }
+        String syncStatus = syncTime() ? "Sync successful" : "Sync unsuccessful";
+        updateDisplay(syncStatus, "", "");
         lastSyncTime = millis();
-    }
-
-    if (timeSynced) {
+    } else {
+        // Update time and display regularly
+        updateTime();
         String currentTime = getFormattedDate();
         String heaterStatus = getHeaterStatus();
 
@@ -61,17 +55,41 @@ void loop() {
             controlHeater(true);   // Turn on heater during off-peak time
         }
 
-        updateDisplay(currentTime, "", heaterStatus);
+        updateDisplay("", currentTime, heaterStatus);  // Empty sync status when not syncing
     }
     
     delay(10000);  // Delay for 10 seconds
 }
 
-void updateDisplay(const String& time, const String& wifiStatus, const String& heaterStatus) {
+void updateTime() {
+    if (timeSynced) {
+        unsigned long currentMillis = millis();
+        unsigned long timeSinceLastSync = currentMillis - lastSyncTime; // Time since last sync in milliseconds
+        unsigned long secondsSinceLastSync = timeSinceLastSync / 1000;   // Convert to seconds
+
+        // Calculate current epoch time
+        unsigned long currentEpoch = lastSyncEpoch + secondsSinceLastSync;
+
+        // Convert epoch time to struct tm
+        struct tm *currentTime = gmtime((time_t *)&currentEpoch);
+
+        // Update global time variables
+        hour = currentTime->tm_hour;
+        minute = currentTime->tm_min;
+        second = currentTime->tm_sec;
+        day = currentTime->tm_mday;
+        month = currentTime->tm_mon + 1;
+        year = currentTime->tm_year + 1900;
+    }
+}
+
+
+
+void updateDisplay(const String& syncStatus, const String& time, const String& heaterStatus) {
     Heltec.display->clear();
     Heltec.display->setTextAlignment(TEXT_ALIGN_CENTER);
-    Heltec.display->drawString(64, 0, time);
-    Heltec.display->drawString(64, 12, wifiStatus);
+    Heltec.display->drawString(64, 0, syncStatus);
+    Heltec.display->drawString(64, 12, time);
     Heltec.display->drawString(64, 24, heaterStatus);
     Heltec.display->display();
 }
@@ -111,12 +129,17 @@ bool syncTime() {
 
     const char* datetime = doc["datetime"]; // "2023-11-14T15:19:30.123456-05:00"
     sscanf(datetime, "%d-%d-%dT%d:%d:%d", &year, &month, &day, &hour, &minute, &second);
+
+    // Extract Unix timestamp from the API response
+    lastSyncEpoch = doc["unixtime"];  // Unix timestamp (epoch time)
+
     timeSynced = true;
 
     WiFi.disconnect(true);
 
     return true;
 }
+
 
 String getFormattedDate() {
     char dateBuffer[20];
