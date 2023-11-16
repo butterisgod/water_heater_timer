@@ -4,8 +4,8 @@
 #include <heltec.h>
 
 // Network credentials
-const char* ssid = "xx";
-const char* password = "xx";
+const char* ssid = "xxx";
+const char* password = "xxx";
 
 // Heater control pin and relay type
 const int heaterPin = 5;
@@ -27,23 +27,33 @@ unsigned long lastSyncEpoch = 0;  // Last synchronized time as Unix timestamp
 void setup() {
     Heltec.begin(true, false, true);  // Initialize Heltec module
     Serial.begin(115200);
+    while (!Serial); // Wait for the serial port to connect
+    Serial.println("Setup Started");
+
     Heltec.display->init();
     Heltec.display->flipScreenVertically();
     Heltec.display->setFont(ArialMT_Plain_10);
 
     pinMode(heaterPin, OUTPUT);  // Initialize heater control pin
 
+    Serial.println("Attempting Time Sync");
     String syncStatus = syncTime() ? "Time Sync success" : "Time Sync unsuccessful";
     updateDisplay(syncStatus, "", "");
+    Serial.println(syncStatus);
 }
 
 void loop() {
+    Serial.println("Entering Loop");
+
     // Check if it's time to sync
     if (millis() - lastSyncTime >= syncInterval) {
+        Serial.println("Time for Sync");
         String syncStatus = syncTime() ? "Sync successful" : "Sync unsuccessful";
         updateDisplay(syncStatus, "", "");
+        Serial.println(syncStatus);
         lastSyncTime = millis();
     } else {
+        Serial.println("Regular Update");
         // Update time and display regularly
         updateTime();
         String currentTime = getFormattedDate();
@@ -57,33 +67,42 @@ void loop() {
 
         updateDisplay("", currentTime, heaterStatus);  // Empty sync status when not syncing
     }
-    
-    delay(10000);  // Delay for 10 seconds
+
+    // Remove or adjust this delay as needed
+     delay(10000);  // Delay for 10 seconds
 }
 
 void updateTime() {
     if (timeSynced) {
         unsigned long currentMillis = millis();
-        unsigned long timeSinceLastSync = currentMillis - lastSyncTime; // Time since last sync in milliseconds
-        unsigned long secondsSinceLastSync = timeSinceLastSync / 1000;   // Convert to seconds
+        unsigned long timeElapsed = currentMillis - lastSyncTime; // Time since last sync in milliseconds
+        unsigned long timeElapsedInSeconds = timeElapsed / 1000; // Convert to seconds
 
-        // Calculate current epoch time
-        unsigned long currentEpoch = lastSyncEpoch + secondsSinceLastSync;
+        // Calculate current Unix timestamp
+        unsigned long currentUnixTime = lastSyncEpoch + timeElapsedInSeconds;
 
-        // Convert epoch time to struct tm
-        struct tm *currentTime = gmtime((time_t *)&currentEpoch);
+        // Convert current Unix timestamp to struct tm
+        time_t rawtime = (time_t)currentUnixTime;
+        struct tm * ptm = localtime(&rawtime);
 
         // Update global time variables
-        hour = currentTime->tm_hour;
-        minute = currentTime->tm_min;
-        second = currentTime->tm_sec;
-        day = currentTime->tm_mday;
-        month = currentTime->tm_mon + 1;
-        year = currentTime->tm_year + 1900;
+        hour = ptm->tm_hour;
+        minute = ptm->tm_min;
+        second = ptm->tm_sec;
+        day = ptm->tm_mday;
+        month = ptm->tm_mon + 1; // tm_mon is months since January (0-11)
+        year = ptm->tm_year + 1900; // tm_year is years since 1900
+        dayOfWeek = ptm->tm_wday; // Sunday = 0, Monday = 1, ...
+
+        Serial.print("Updated Time: ");
+        Serial.print(hour);
+        Serial.print(":");
+        Serial.print(minute);
+        Serial.println(); // Don't print seconds
+    } else {
+        Serial.println("Time not synced yet.");
     }
 }
-
-
 
 void updateDisplay(const String& syncStatus, const String& time, const String& heaterStatus) {
     Heltec.display->clear();
@@ -123,15 +142,21 @@ bool syncTime() {
     }
 
     String payload = client.readString();
+    Serial.println("Received payload from WorldTime API");
+    Serial.println(payload); // Print the payload for debugging
 
     DynamicJsonDocument doc(1024);
     deserializeJson(doc, payload);
 
-    const char* datetime = doc["datetime"]; // "2023-11-14T15:19:30.123456-05:00"
-    sscanf(datetime, "%d-%d-%dT%d:%d:%d", &year, &month, &day, &hour, &minute, &second);
+    String datetime = doc["datetime"].as<String>(); // Extract datetime field
 
-    // Extract Unix timestamp from the API response
-    lastSyncEpoch = doc["unixtime"];  // Unix timestamp (epoch time)
+    // Parse the datetime string, ignoring milliseconds and timezone offset
+    // Format: YYYY-MM-DDTHH:MM:SS (ISO 8601 format)
+    sscanf(datetime.c_str(), "%d-%d-%dT%d:%d:%d", &year, &month, &day, &hour, &minute, &second);
+
+    // Set lastSyncEpoch to the current Unix time for future calculations
+    // Assuming that the API returns the unixtime in UTC, convert it to local time
+    lastSyncEpoch = doc["unixtime"].as<unsigned long>() + doc["raw_offset"].as<long>();
 
     timeSynced = true;
 
@@ -141,9 +166,13 @@ bool syncTime() {
 }
 
 
+
+
+
 String getFormattedDate() {
     char dateBuffer[20];
-    sprintf(dateBuffer, "%04d-%02d-%02d %02d:%02d:%02d", year, month, day, hour, minute, second);
+    // Format the date and time without seconds
+    sprintf(dateBuffer, "%04d-%02d-%02d %02d:%02d", year, month, day, hour, minute);
     return String(dateBuffer);
 }
 
