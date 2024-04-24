@@ -4,8 +4,8 @@
 #include <heltec.h>
 
 // Network credentials
-const char* ssid = "xxx";
-const char* password = "xxx";
+const char* ssid = "2219";
+const char* password = "48634009bd";
 
 // Heater control pin and relay type
 const int heaterPin = 5;
@@ -156,7 +156,7 @@ bool syncTime() {
 
     // Set lastSyncEpoch to the current Unix time for future calculations
     // Assuming that the API returns the unixtime in UTC, convert it to local time
-    lastSyncEpoch = doc["unixtime"].as<unsigned long>() + doc["raw_offset"].as<long>();
+    lastSyncEpoch = doc["unixtime"].as<unsigned long>() + doc["raw_offset"].as<long>() + doc["dst_offset"].as<long>();
 
     timeSynced = true;
 
@@ -189,16 +189,16 @@ bool isPeakTime() {
     dayOfWeek = dayOfWeek == 0 ? 7 : dayOfWeek;
 
     if (dayOfWeek >= 1 && dayOfWeek <= 5) {  // Weekday check
-        if ((month >= 11 || month <= 3)) {
-            if ((hour == 6 && minute >= 55) || // 5 minutes before peak time starts in winter
-                (hour > 6 && hour < 9) || // peak time
-                (hour == 9 && minute < 5)) { // 5 minutes after peak time ends in winter
+        if ((month >= 11 || month <= 3)) {  // Winter months
+            if ((hour == 5 && minute >= 55) || // 5 minutes before peak time starts in winter
+                (hour > 5 && hour < 10) || // peak time
+                (hour == 10 && minute < 5)) { // 5 minutes after peak time ends in winter
                 return true;
             }
-        } else if (month >= 4 && month <= 10) {
-            if ((hour == 13 && minute >= 55) || // 5 minutes before peak time starts in summer
-                (hour > 13 && hour < 19) || // peak time
-                (hour == 19 && minute < 5)) { // 5 minutes after peak time ends in summer
+        } else if (month >= 4 && month <= 10) {  // Summer months
+            if ((hour == 12 && minute >= 55) || // 5 minutes before peak time starts in summer
+                (hour > 12 && hour < 20) || // peak time
+                (hour == 20 && minute < 5)) { // 5 minutes after peak time ends in summer
                 return true;
             }
         }
