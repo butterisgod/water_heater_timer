@@ -17,7 +17,7 @@ const char* timeZone = "America/New_York";  // Change this to your desired timez
 
 // Global variable to track last sync time
 unsigned long lastSyncTime = 0;
-const unsigned long syncInterval = 86400000; // 24 hours in milliseconds
+const unsigned long syncInterval = 3600000; // 24 hours in milliseconds
 
 // Time variables
 int hour, minute, second, day, month, year, dayOfWeek;
@@ -38,7 +38,7 @@ void setup() {
 
     Serial.println("Attempting Time Sync");
     String syncStatus = syncTime() ? "Time Sync success" : "Time Sync unsuccessful";
-    updateDisplay(syncStatus, "", "");
+    updateDisplay(syncStatus, "", "", syncStatus.startsWith("Time Sync unsuccessful") ? "TIME SYNC FAILED" : "");
     Serial.println(syncStatus);
 }
 
@@ -49,12 +49,10 @@ void loop() {
     if (millis() - lastSyncTime >= syncInterval) {
         Serial.println("Time for Sync");
         String syncStatus = syncTime() ? "Sync successful" : "Sync unsuccessful";
-        updateDisplay(syncStatus, "", "");
-        Serial.println(syncStatus);
+        updateDisplay(syncStatus, "", "", syncStatus.startsWith("Sync unsuccessful") ? "TIME SYNC FAILED" : "");
         lastSyncTime = millis();
     } else {
         Serial.println("Regular Update");
-        // Update time and display regularly
         updateTime();
         String currentTime = getFormattedDate();
         String heaterStatus = getHeaterStatus();
@@ -65,66 +63,74 @@ void loop() {
             controlHeater(true);   // Turn on heater during off-peak time
         }
 
-        updateDisplay("", currentTime, heaterStatus);  // Empty sync status when not syncing
+        updateDisplay("", currentTime, heaterStatus, "");  // Empty sync status when not syncing
     }
 
     // Remove or adjust this delay as needed
-     delay(10000);  // Delay for 10 seconds
+    delay(10000);  // Delay for 10 seconds
 }
 
 void updateTime() {
+    unsigned long currentMillis = millis();
+    unsigned long timeElapsed = currentMillis - lastSyncTime; // Time since last sync or last update in milliseconds
+    unsigned long timeElapsedInSeconds = timeElapsed / 1000; // Convert to seconds
+
     if (timeSynced) {
-        unsigned long currentMillis = millis();
-        unsigned long timeElapsed = currentMillis - lastSyncTime; // Time since last sync in milliseconds
-        unsigned long timeElapsedInSeconds = timeElapsed / 1000; // Convert to seconds
-
-        // Calculate current Unix timestamp
         unsigned long currentUnixTime = lastSyncEpoch + timeElapsedInSeconds;
-
-        // Convert current Unix timestamp to struct tm
         time_t rawtime = (time_t)currentUnixTime;
         struct tm * ptm = localtime(&rawtime);
-
-        // Update global time variables
         hour = ptm->tm_hour;
         minute = ptm->tm_min;
         second = ptm->tm_sec;
         day = ptm->tm_mday;
-        month = ptm->tm_mon + 1; // tm_mon is months since January (0-11)
-        year = ptm->tm_year + 1900; // tm_year is years since 1900
-        dayOfWeek = ptm->tm_wday; // Sunday = 0, Monday = 1, ...
-
-        Serial.print("Updated Time: ");
-        Serial.print(hour);
-        Serial.print(":");
-        Serial.print(minute);
-        Serial.println(); // Don't print seconds
+        month = ptm->tm_mon + 1;
+        year = ptm->tm_year + 1900;
+        dayOfWeek = ptm->tm_wday;
     } else {
-        Serial.println("Time not synced yet.");
+        second += timeElapsedInSeconds;
+        while (second >= 60) {
+            minute++;
+            second -= 60;
+        }
+        while (minute >= 60) {
+            hour++;
+            minute -= 60;
+        }
+        while (hour >= 24) {
+            hour -= 24;
+            // Increment day here if needed
+        }
     }
+    // Remove lastSyncTime update from here
+    Serial.print("Updated Time: ");
+    Serial.print(hour);
+    Serial.print(":");
+    Serial.print(minute);
+    Serial.println(); // Don't print seconds
 }
 
-void updateDisplay(const String& syncStatus, const String& time, const String& heaterStatus) {
+
+void updateDisplay(const String& syncStatus, const String& time, const String& heaterStatus, const String& bottomMessage) {
     Heltec.display->clear();
     Heltec.display->setTextAlignment(TEXT_ALIGN_CENTER);
     Heltec.display->drawString(64, 0, syncStatus);
     Heltec.display->drawString(64, 12, time);
     Heltec.display->drawString(64, 24, heaterStatus);
+    Heltec.display->drawString(64, 36, bottomMessage);
     Heltec.display->display();
 }
 
 bool syncTime() {
     WiFi.begin(ssid, password);
     if (WiFi.waitForConnectResult() != WL_CONNECTED) {
-        return false; // WiFi connection failed
+        return false;
     }
 
     WiFiClientSecure client;
-    client.setInsecure(); // Disable SSL certificate verification
-
+    client.setInsecure();
     if (!client.connect(worldTimeApiHost, 443)) {
         WiFi.disconnect(true);
-        return false; // Connection to API failed
+        return false;
     }
 
     client.print("GET /api/timezone/");
@@ -137,41 +143,27 @@ bool syncTime() {
     while (client.connected()) {
         String line = client.readStringUntil('\n');
         if (line == "\r") {
-            break; // Headers are finished
+            break;
         }
     }
 
     String payload = client.readString();
     Serial.println("Received payload from WorldTime API");
-    Serial.println(payload); // Print the payload for debugging
+    Serial.println(payload);
 
     DynamicJsonDocument doc(1024);
     deserializeJson(doc, payload);
 
-    String datetime = doc["datetime"].as<String>(); // Extract datetime field
-
-    // Parse the datetime string, ignoring milliseconds and timezone offset
-    // Format: YYYY-MM-DDTHH:MM:SS (ISO 8601 format)
+    String datetime = doc["datetime"].as<String>();
     sscanf(datetime.c_str(), "%d-%d-%dT%d:%d:%d", &year, &month, &day, &hour, &minute, &second);
-
-    // Set lastSyncEpoch to the current Unix time for future calculations
-    // Assuming that the API returns the unixtime in UTC, convert it to local time
     lastSyncEpoch = doc["unixtime"].as<unsigned long>() + doc["raw_offset"].as<long>() + doc["dst_offset"].as<long>();
-
     timeSynced = true;
-
     WiFi.disconnect(true);
-
     return true;
 }
 
-
-
-
-
 String getFormattedDate() {
     char dateBuffer[20];
-    // Format the date and time without seconds
     sprintf(dateBuffer, "%04d-%02d-%02d %02d:%02d", year, month, day, hour, minute);
     return String(dateBuffer);
 }
@@ -185,23 +177,17 @@ String getHeaterStatus() {
 }
 
 bool isPeakTime() {
-    // Adjust dayOfWeek to be 1 for Monday, 7 for Sunday
     dayOfWeek = dayOfWeek == 0 ? 7 : dayOfWeek;
-
-    if (dayOfWeek >= 1 && dayOfWeek <= 5) {  // Weekday check
-        if ((month >= 11 || month <= 3)) {  // Winter months
-            if ((hour == 5 && minute >= 55) || // 5 minutes before peak time starts in winter
-                (hour > 5 && hour < 10) || // peak time
-                (hour == 10 && minute < 5)) { // 5 minutes after peak time ends in winter
+    if (dayOfWeek >= 1 && dayOfWeek <= 5) {
+        if ((month >= 11 || month <= 3)) {
+            if ((hour == 5 && minute >= 55) || (hour > 5 && hour < 10) || (hour == 10 && minute < 5)) {
                 return true;
             }
-        } else if (month >= 4 && month <= 10) {  // Summer months
-            if ((hour == 12 && minute >= 55) || // 5 minutes before peak time starts in summer
-                (hour > 12 && hour < 20) || // peak time
-                (hour == 20 && minute < 5)) { // 5 minutes after peak time ends in summer
+        } else if (month >= 4 && month <= 10) {
+            if ((hour == 12 && minute >= 55) || (hour > 12 && hour < 20) || (hour == 20 && minute < 5)) {
                 return true;
             }
         }
     }
-    return false;  // Non-peak time
+    return false;
 }
